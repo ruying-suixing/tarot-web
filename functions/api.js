@@ -1,37 +1,39 @@
-// tarot-web/functions/api.js
-export async function onRequestPost({ request }) {
-  // 全局异常捕获，所有报错都返回正常HTTP响应，杜绝1101
-  try {
-    // 1. 校验请求类型
-    if (request.method !== "POST") {
-      return new Response(JSON.stringify({ error: "仅支持POST请求" }), {
-        status: 405,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
+// 固定配置
+const API_KEY = "7a731303e72744e287a21daa021eaa3f.fMYf7XN1zGJLrQqs";
+const API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+const MODEL = "glm-4.7-flash";
 
-    // 2. 安全解析请求体，捕获JSON解析失败
+export async function onRequestPost({ request }) {
+  // 全局异常兜底：所有错误都返回正常HTTP响应，杜绝1101崩溃
+  try {
+    // 1. 安全解析请求体，捕获JSON解析失败
     let bodyJson;
     try {
       bodyJson = await request.json();
     } catch (parseErr) {
       return new Response(JSON.stringify({ error: "请求体JSON格式错误" }), {
         status: 400,
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json;charset=utf-8" }
       });
     }
 
-    // 3. 校验必填参数
+    // 2. 校验必填参数
     const { text, pms } = bodyJson;
     if (!text || !Array.isArray(pms)) {
-      return new Response(JSON.stringify({ error: "缺少参数text或pms卡牌数组" }), {
+      return new Response(JSON.stringify({ error: "缺少参数 text 或 pms 卡牌数组" }), {
         status: 400,
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json;charset=utf-8" }
       });
     }
 
-    // 构造AI请求体
+    // 3. 构造AI请求体（原塔罗牌解析逻辑100%保留）
     const reqBody = {
+      model: MODEL,
+      stream: false,
+      temperature: 0,
+      presence_penalty: 0,
+      frequency_penalty: 0,
+      top_p: 1,
       messages: [
         {
           role: "system",
@@ -41,26 +43,20 @@ export async function onRequestPost({ request }) {
           role: "user",
           content: `卡牌数组是：${JSON.stringify(pms)}，问题是：'${text}？'，请帮我解析`
         }
-      ],
-      stream: false,
-      model: "glm-4-flash",
-      temperature: 0,
-      presence_penalty: 0,
-      frequency_penalty: 0,
-      top_p: 1
+      ]
     };
 
-    // 4. 请求AI接口，捕获网络/超时错误
-    const res = await fetch("https://nas-ai.4ce.cn/v1/chat/completions", {
+    // 4. 请求智谱官方接口
+    const res = await fetch(API_URL, {
       method: "POST",
       headers: {
-        Authorization: "Bearer sk-L8W2WtnCtdwG6nctF975D0E770144dE5Be3123Fa16720a03",
+        Authorization: `Bearer ${API_KEY}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify(reqBody)
     });
 
-    // 校验AI接口返回状态
+    // 5. 校验接口响应状态，非成功直接返回错误，不崩溃
     if (!res.ok) {
       const errText = await res.text();
       return new Response(JSON.stringify({
@@ -68,35 +64,33 @@ export async function onRequestPost({ request }) {
         detail: errText
       }), {
         status: 500,
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json;charset=utf-8" }
       });
     }
 
-    // 解析AI返回数据
+    // 6. 解析返回数据，做结构容错
     const data = await res.json();
-    // 容错：choices不存在或为空
-    if (!data?.choices?.length) {
-      return new Response(JSON.stringify({ error: "AI返回数据为空" }), {
+    if (!data?.choices?.length || !data.choices[0]?.message?.content) {
+      return new Response(JSON.stringify({ error: "AI返回数据格式异常" }), {
         status: 500,
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json;charset=utf-8" }
       });
     }
 
-    // 正常返回解析文本
+    // 7. 正常返回解析结果
     return new Response(data.choices[0].message.content, {
       headers: { "Content-Type": "text/plain;charset=utf-8" }
     });
 
   } catch (globalErr) {
-    // 兜底捕获所有未知异常，输出错误信息，不会再触发1101
-    console.error("Worker全局异常：", globalErr);
+    // 兜底所有未知异常，输出到日志同时返回友好提示
+    console.error("Worker执行异常：", globalErr);
     return new Response(JSON.stringify({
       error: "服务内部异常",
-      msg: globalErr.message,
-      stack: globalErr.stack
+      message: globalErr.message
     }), {
       status: 500,
-      headers: { "Content-Type": "application/json" }
+      headers: { "Content-Type": "application/json;charset=utf-8" }
     });
   }
 }
